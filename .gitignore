@@ -1,0 +1,50 @@
+# Build outputs
+bin/
+*.o
+*.a
+*.so
+
+# Documentation (internal specs)
+spec/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+nids_env/
+cicflowmeter/.venv/
+
+# Generated outputs
+outputs/
+
+
+# Data files
+dataset/
+*.csv
+!examples/ids/test_data/*.csv
+*.pcap
+*.pcapng
+
+# QEMU/OpenWRT images
+*.img
+*.img.gz
+*.elf
+*.zst
+toolchain/
+openwrt-*/
+extra_storage.img
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# QEMU files
+qemu/
+
+
