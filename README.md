@@ -77,6 +77,20 @@ objdump -d bin/ids-mips | grep -E 'lwc1|swc1|add\.s|mul\.s'
 # Check ABI
 readelf -A bin/ids-mips | grep "FP ABI"
 ```
+## Run on Qemu
+
+```bash
+./tools/setup_qemu_mips.sh download
+sudo ./tools/setup_qemu_mips.sh get_cc
+
+source ./tools/setup_env.sh
+make mips
+
+sudo ./tools/setup_qemu_mips.sh start
+./tools/setup_qemu_mips.sh copy
+
+```
+
 
 ## Training Your Own Model
 

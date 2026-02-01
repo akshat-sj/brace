@@ -61,30 +61,25 @@ download_openwrt() {
 
 get_cross_compiler() {
     log_info "Downloading SDK files..."
+    [ "$EUID" -ne 0 ] && { echo "Run as root (sudo)"; exit 1; }
     cd "$SCRIPT_DIR"
 
     # Download SDK
     if [ ! -f "$SDK" ]; then
-        log_info "Downloading kernel..."
+        log_info "Downloading SDK..."
         wget -q --show-progress "${OPENWRT_BASE_URL}/${SDK}"
-        
-        tar -I zstd -xf openwrt-sdk-24.10.0-malta-le_gcc-13.3.0_musl.Linux-x86_64.tar.zst 
-        cd openwrt-sdk-24.10.0-malta-le_gcc-13.3.0_musl.Linux-x86_64
-
-        export STAGING_DIR=$(pwd)/staging_dir
-        export TOOLCHAIN_DIR=$STAGING_DIR/toolchain-mipsel_24kc_gcc-13.3.0_musl
-        export TARGET_DIR=$STAGING_DIR/target-mipsel_24kc_musl
-        export PATH=$TOOLCHAIN_DIR/bin:$PATH
-
-        # Add libpcap To Cross-Compiler
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
-        make menuconfig
-
-        # make package/libpcap/compile V=s
-    else
-        log_success "SDK already exists"
     fi
+
+    tar -I zstd -xf "$SDK"
+    cd openwrt-sdk-24.10.0-malta-le_gcc-13.3.0_musl.Linux-x86_64
+
+    # Add libpcap To Cross-Compiler
+    ./scripts/feeds update -a
+    ./scripts/feeds install -a
+
+    echo "CONFIG_PACKAGE_libpcap=y" >> .config
+    make defconfig
+    make package/libpcap/compile V=s
 
     log_success "SDK files ready"
 }
@@ -349,7 +344,7 @@ case "${1:-}" in
     toolchain)
         download_toolchain
         ;;
-    compile)
+    get_cc)
         get_cross_compiler
         ;;
     start)
