@@ -1,8 +1,7 @@
 #!/bin/bash
 #
 # QEMU MIPS32 Setup and Benchmark Script
-# For MIPS-ML NIDS Project
-#
+# For MIPS-ML IDS Project
 
 set -e
 
@@ -21,8 +20,7 @@ OPENWRT_BASE_URL="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targ
 ROOTFS_GZ="openwrt-${OPENWRT_VERSION}-malta-le-rootfs-ext4.img.gz"
 ROOTFS_IMG="openwrt-${OPENWRT_VERSION}-malta-le-rootfs-ext4.img"
 KERNEL="openwrt-${OPENWRT_VERSION}-malta-le-vmlinux.elf"
-TOOLCHAIN="openwrt-toolchain-${OPENWRT_VERSION}-malta-le_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
-EXTRA_STORAGE="extra_storage.img"
+SDK="openwrt-sdk-${OPENWRT_VERSION}-malta-le_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
 
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
@@ -37,17 +35,14 @@ download_openwrt() {
     log_info "Downloading OpenWRT files..."
     cd "$SCRIPT_DIR"
 
-    # Download rootfs
-    if [ ! -f "$ROOTFS_IMG" ]; then
-        if [ ! -f "$ROOTFS_GZ" ]; then
-            log_info "Downloading rootfs image..."
-            wget -q --show-progress "${OPENWRT_BASE_URL}/${ROOTFS_GZ}"
-        fi
-        log_info "Extracting rootfs..."
-        gunzip -k "$ROOTFS_GZ"
-    else
-        log_success "Rootfs already exists"
-    fi
+    # Download rootfs 
+    log_info "Downloading rootfs image..."
+    wget -q --show-progress "${OPENWRT_BASE_URL}/${ROOTFS_GZ}"
+
+    # Extract
+    log_info "Extracting rootfs..."
+    gunzip -k "$ROOTFS_GZ"
+    rm -f "$ROOTFS_GZ"
 
     # Download kernel
     if [ ! -f "$KERNEL" ]; then
@@ -57,102 +52,76 @@ download_openwrt() {
         log_success "Kernel already exists"
     fi
 
-    # Create extra storage
-    if [ ! -f "$EXTRA_STORAGE" ]; then
-        log_info "Creating extra storage disk (512MB)..."
-        qemu-img create -f raw "$EXTRA_STORAGE" 512M
-    else
-        log_success "Extra storage already exists"
-    fi
-
     log_success "OpenWRT files ready"
 }
 
-download_toolchain() {
-    log_info "Downloading MIPS toolchain..."
-    cd "$SCRIPT_DIR"
-
-    if [ ! -f "$TOOLCHAIN" ]; then
-        log_info "Downloading toolchain (~44MB)..."
-        wget -q --show-progress "${OPENWRT_BASE_URL}/${TOOLCHAIN}"
-    fi
-
-    if [ ! -d "toolchain" ]; then
-        log_info "Extracting toolchain..."
-        mkdir -p toolchain
-        tar -I zstd -xf "$TOOLCHAIN" -C toolchain --strip-components=1
-    fi
-
-    log_success "Toolchain ready at $SCRIPT_DIR/toolchain"
-}
-
 # ============================================================
-# Cross-Compilation
+# Get Cross-Compiler
 # ============================================================
 
-cross_compile() {
-    log_info "Cross-compiling for MIPS32..."
+get_cross_compiler() {
+    log_info "Downloading SDK files..."
     cd "$SCRIPT_DIR"
 
-    # Find the cross-compiler
-    local CC=""
-    local TOOLCHAIN_BIN="$SCRIPT_DIR/toolchain/bin"
+    # Download SDK
+    if [ ! -f "$SDK" ]; then
+        log_info "Downloading kernel..."
+        wget -q --show-progress "${OPENWRT_BASE_URL}/${SDK}"
+        
+        tar -I zstd -xf openwrt-sdk-24.10.0-malta-le_gcc-13.3.0_musl.Linux-x86_64.tar.zst 
+        cd openwrt-sdk-24.10.0-malta-le_gcc-13.3.0_musl.Linux-x86_64
 
-    if [ -d "$TOOLCHAIN_BIN" ]; then
-        CC=$(find "$TOOLCHAIN_BIN" -name "*-gcc" | head -1)
+        export STAGING_DIR=$(pwd)/staging_dir
+        export TOOLCHAIN_DIR=$STAGING_DIR/toolchain-mipsel_24kc_gcc-13.3.0_musl
+        export TARGET_DIR=$STAGING_DIR/target-mipsel_24kc_musl
+        export PATH=$TOOLCHAIN_DIR/bin:$PATH
+
+        # Add libpcap To Cross-Compiler
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        make menuconfig
+
+        # make package/libpcap/compile V=s
+    else
+        log_success "SDK already exists"
     fi
 
-    if [ -z "$CC" ] || [ ! -x "$CC" ]; then
-        # Try system cross-compiler
-        if command -v mipsel-linux-gnu-gcc-11 &> /dev/null; then
-            CC="mipsel-linux-gnu-gcc-11"
-        elif command -v mipsel-linux-gnu-gcc &> /dev/null; then
-            CC="mipsel-linux-gnu-gcc"
-        else
-            log_error "No MIPS cross-compiler found!"
-            log_info "Install with: sudo apt install gcc-11-mipsel-linux-gnu"
-            log_info "Or run: $0 toolchain"
-            return 1
-        fi
-    fi
-
-    log_info "Using compiler: $CC"
-
-    # Compile model_integer.c (pure C, no dependencies)
-    if [ -f "model_integer.c" ]; then
-        log_info "Compiling model_integer.c..."
-        # Try with soft-float first, fall back to hard-float if not available
-        # (code is integer-only so no FPU instructions generated anyway)
-        if $CC -static -O2 -msoft-float model_integer.c -o Bin/model_integer_mips -DMIPS32_BUILD 2>/dev/null; then
-            log_success "Compiled with soft-float"
-        else
-            log_warn "Soft-float libs not available, compiling with hard-float"
-            $CC -static -O2 model_integer.c -o Bin/model_integer_mips -DMIPS32_BUILD
-        fi
-        log_success "Created Bin/model_integer_mips"
-        file Bin/model_integer_mips
-
-        # Verify no FPU instructions (integer-only code)
-        log_info "Checking for FPU instructions..."
-        if mipsel-linux-gnu-objdump -d Bin/model_integer_mips 2>/dev/null | grep -qE '\s(lwc1|swc1|add\.s|mul\.s|div\.s|cvt\.)'; then
-            log_warn "Warning: FPU instructions detected!"
-        else
-            log_success "No FPU instructions - safe for soft-float MIPS"
-        fi
-    fi
-
-    # Compile capture_stream.c (needs libpcap - static build)
-    if [ -f "capture_stream.c" ]; then
-        log_warn "capture_stream.c requires libpcap for MIPS"
-        log_info "For now, use the pre-compiled 'capture' binary or build in QEMU"
-    fi
-
-    log_success "Cross-compilation complete"
+    log_success "SDK files ready"
 }
 
 # ============================================================
 # QEMU Functions
 # ============================================================
+
+config_qemu(){
+    log_info "Configuring QEMU MIPS32..."
+    cd "$SCRIPT_DIR"
+
+    MNT="boot_mnt"
+    mkdir -p "$MNT"
+
+    sudo mount -o loop "$ROOTFS_IMG" "$MNT"
+    sudo tee ${MNT}/etc/uci-defaults/99-firstboot-setup > /dev/null <<'EOF'
+#!/bin/sh
+
+uci set network.lan.proto='dhcp'
+uci set network.lan.device='eth0'
+uci set network.lan.ifname='eth0'
+uci commit network
+
+/etc/init.d/network restart
+/etc/init.d/dropbear enable
+/etc/init.d/dropbear start
+
+EOF
+
+    sudo chmod +x "$MNT/etc/uci-defaults/99-firstboot-setup"
+    sync
+    sudo umount "$MNT"
+
+    log_success "Image configured successfully."
+
+}
 
 start_qemu() {
     log_info "Starting QEMU MIPS32..."
@@ -163,10 +132,8 @@ start_qemu() {
         exit 1
     fi
 
-    log_info "QEMU will start. Login as 'root' (no password)"
-    log_info "SSH available at localhost:2222"
-    log_info "Press Ctrl+A then X to exit QEMU"
-    echo ""
+    [ "$EUID" -ne 0 ] && { echo "Run as root (sudo)"; exit 1; }
+    config_qemu
 
     qemu-system-mipsel -M malta \
         -hda "$ROOTFS_IMG" \
@@ -174,11 +141,12 @@ start_qemu() {
         -nographic \
         -append "root=/dev/sda console=ttyS0" \
         -net nic -net user,hostfwd=tcp::2222-:22 \
-        -drive file="$EXTRA_STORAGE",format=raw \
         -m 128
+
+    
 }
 
-start_qemu_background() {
+start_qemu_background() { # i did not test, make it call config to make it work
     log_info "Starting QEMU in background..."
     cd "$SCRIPT_DIR"
 
@@ -200,7 +168,6 @@ start_qemu_background() {
         -nographic \
         -append "root=/dev/sda console=ttyS0" \
         -net nic -net user,hostfwd=tcp::2222-:22 \
-        -drive file="$EXTRA_STORAGE",format=raw \
         -m 128 \
         > /tmp/qemu-mips.log 2>&1 &
 
@@ -224,7 +191,7 @@ start_qemu_background() {
     return 1
 }
 
-stop_qemu() {
+stop_qemu() { # i did not test
     log_info "Stopping QEMU..."
     if [ -f /tmp/qemu-mips.pid ]; then
         kill $(cat /tmp/qemu-mips.pid) 2>/dev/null || true
@@ -239,6 +206,7 @@ stop_qemu() {
 # ============================================================
 
 copy_to_qemu() {
+    cd ${SCRIPT_DIR}
     log_info "Copying binaries to QEMU..."
 
     local SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
@@ -249,23 +217,18 @@ copy_to_qemu() {
     $SSH "mkdir -p /tmp/benchmark" 2>/dev/null
 
     # Copy MIPS binaries
-    if [ -f "Bin/model_integer_mips" ]; then
-        $SCP Bin/model_integer_mips root@localhost:/tmp/benchmark/
+    if [ -f "../bin/ids-mips" ]; then
+        $SCP ../bin/ids-mips root@localhost:/tmp/benchmark/
         log_success "Copied model_integer_mips"
     fi
 
-    if [ -f "Bin/capture" ]; then
-        $SCP Bin/capture root@localhost:/tmp/benchmark/
+    if [ -f "../bin/cicflowmeter-mips" ]; then
+        $SCP ../bin/cicflowmeter-mips root@localhost:/tmp/benchmark/
         log_success "Copied capture"
     fi
 
-    if [ -f "Bin/model" ]; then
-        $SCP Bin/model root@localhost:/tmp/benchmark/
-        log_success "Copied model"
-    fi
-
     # Copy test data
-    local TEST_CSV="../real_attack_pcaps/dos_syn_flood_model.csv"
+    local TEST_CSV="../examples/ids/test_data/syn_flood.csv"
     if [ -f "$TEST_CSV" ]; then
         $SCP "$TEST_CSV" root@localhost:/tmp/benchmark/test_data.csv
         log_success "Copied test data"
@@ -281,7 +244,7 @@ EOF
     fi
 }
 
-run_benchmark() {
+run_benchmark() { # didnt test it, files not found 
     log_info "Running benchmarks on MIPS32..."
 
     local SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
@@ -338,7 +301,7 @@ run_benchmark() {
     log_success "Benchmark complete!"
 }
 
-full_benchmark() {
+full_benchmark() { # didnt test it, files not found 
     log_info "Running full benchmark suite..."
 
     # Ensure QEMU is running
@@ -387,7 +350,7 @@ case "${1:-}" in
         download_toolchain
         ;;
     compile)
-        cross_compile
+        get_cross_compiler
         ;;
     start)
         start_qemu
