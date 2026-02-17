@@ -5,7 +5,10 @@ MIPS_CC ?= mipsel-openwrt-linux-musl-gcc
 ARM_CC ?= arm-linux-gnueabi-gcc
 
 CFLAGS = -O2 -Wall -Wextra
+MIPS32_CFLAGS := -I${TARGET_DIR}/usr/include 
+
 LDFLAGS_PCAP = -lpcap -lm
+MIPS32_LDFLAGS := -L${TARGET_DIR}/usr/lib -lpcap -static
 
 SRC = src
 BIN = bin
@@ -26,12 +29,16 @@ $(BIN)/ids: $(EXAMPLES)/ids/model.c
 	$(CC) $(CFLAGS) -o $@ $<
 
 # MIPS32 soft-float (OpenWRT routers: TP-Link, GL.iNet, etc.)
-mips: $(BIN)/ids-mips
+mips: $(BIN)/ids-mips $(BIN)/cicflowmeter-mips
 $(BIN)/ids-mips: $(EXAMPLES)/ids/model.c
 	@mkdir -p $(BIN)
-	$(MIPS_CC) -static $(CFLAGS) -o $@ $<
+	$(MIPS_CC) -static $(MIPS32_CFLAGS) -o $@ $<
 	@echo "Verifying soft-float..."
 	@! objdump -d $@ 2>/dev/null | grep -qE '\s(lwc1|swc1|add\.s|mul\.s)' && echo "OK: No FPU ops"
+
+$(BIN)/cicflowmeter-mips: $(SRC)/cicflowmeter/cicflowmeter.c
+	@mkdir -p $(BIN)
+	$(MIPS_CC) $(MIPS32_CFLAGS) -o $@ $< $(MIPS32_LDFLAGS)
 
 # ARM soft-float
 arm: $(BIN)/ids-arm
