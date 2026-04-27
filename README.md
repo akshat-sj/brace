@@ -1,4 +1,4 @@
-# Palisade
+# BRACE
 
 An execution framework for deploying ML-based network analytics on embedded routers without floating-point hardware, high-level runtimes, or centralized processing.
 
